@@ -1,0 +1,34 @@
+# environment / caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# personal runtime data: memory database, backups, logs, API token, local settings
+data/
+config/settings.json
+.env
+*.log
+
+# third-party character model (Project SEKAI assets, personal use only, do not publish)
+assets/miku_model/
+assets/miku3d/
+
+# model training material: weights, adapters, datasets (large and/or not redistributable)
+miku_gemma4_run/
+miku_gemma4_E4B_LoRA_v4/
+miku_v5_repair/
+GGUF_Q4/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+miku_data/*
+!miku_data/miku_persona_system_v4.txt
+
+# Blender / editor leftovers
+*.blend1
+.vscode/
+.idea/
+.claude/
