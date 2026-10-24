@@ -216,7 +216,15 @@ def register_builtin_tools(reg: ToolRegistry, bridge: WindowsBridge, settings: S
                       "previous — предыдущий трек.",
                       _obj({"action": {"type": "string", "enum": ["pause", "play", "next", "previous"]}}, ["action"]),
                       Perm.MEDIA, wrap(lambda action: spotify.control(action)), timeout, repeatable=True))
-    reg.register(Tool("spotify_search", "Открыть в Spotify поиск музыки по запросу.",
+    reg.register(Tool("spotify_play", "Найти в Spotify трек по названию и исполнителю и включить первый результат.",
+                      _obj({"query": {"type": "string", "minLength": 1, "maxLength": 200,
+                                      "description": "название трека ВМЕСТЕ с исполнителем, если он назван или "
+                                                     "очевиден (например «World is Mine Hatsune Miku»): без "
+                                                     "исполнителя Spotify может включить другую песню"}},
+                           ["query"]),
+                      Perm.MEDIA, wrap(lambda query: spotify.play_search(query)), max(timeout, 25),
+                      untrusted_output=True, repeatable=True))
+    reg.register(Tool("spotify_search", "Открыть в Spotify поиск музыки по запросу (без включения).",
                       _obj({"query": {"type": "string", "minLength": 1, "maxLength": 200}}, ["query"]),
                       Perm.MEDIA, wrap(lambda query: spotify.search(query)), timeout))
     reg.register(Tool("open_spotify", "Запустить Spotify.", _obj({}), Perm.MEDIA, wrap(lambda: spotify.open()),

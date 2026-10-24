@@ -368,3 +368,33 @@ def test_spotify_play_pause_are_idempotent(monkeypatch):
     assert not r["changed"] and r["note"] == "already paused" and sent == [14]
     assert s.control("play", settle_s=0.3)["changed"] and sent == [14, 14]
     assert s.control("play", settle_s=0.3)["note"] == "already playing" and sent == [14, 14]
+
+
+def test_spotify_play_button_names():
+    from mikuos.windows.media import play_button_title as t
+    assert t("Слушать плейлист «World is Mine - CPK! Remix»") == "World is Mine - CPK! Remix"
+    assert t("Слушать плейлист «ワールドイズマイン»") == "ワールドイズマイン"
+    assert t("Play World is Mine by ryo") == "World is Mine by ryo"
+    for other in ("Слушать", "Следующий трек", "Play", "Добавить в медиатеку"):
+        assert t(other) is None, other
+
+
+async def test_spotify_play_tool(tmp_settings, tmp_path):
+    class PlayingSpotify(RecordingSpotify):
+        def play_search(self, query):
+            self.sent.append(("play", query))
+            return {"query": query, "pressed_play_on": query, "started": True,
+                    "now_playing": {"running": True, "playing": True, "artist": "X", "track": query}}
+
+    perms = PermissionManager(tmp_settings)
+    store = MemoryStore(Database(tmp_path / "p.db"))
+    reg = ToolRegistry(perms, store)
+    sp = PlayingSpotify()
+    register_builtin_tools(reg, WindowsBridge(), tmp_settings, store, MemoryManager(store), perms, spotify=sp)
+    t = TurnState()
+    r = await reg.execute("spotify_play", {"query": "World is Mine"}, t)
+    assert r["status"] == "ok" and r["data"]["started"] and t.tainted  # track names are untrusted text
+    assert (await reg.execute("spotify_play", {"query": "World is Mine"}, TurnState()))["status"] == "ok"  # repeatable
+    assert sp.sent == [("play", "World is Mine")] * 2
+    r = await reg.execute("spotify_play", {"query": "x"}, TurnState(origin=Origin.AUTONOMOUS))
+    assert r["status"] == "denied"

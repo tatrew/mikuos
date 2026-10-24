@@ -125,6 +125,7 @@ class AgentEngine:
                     or (not result.tool_events and claims_action(gen.content))):
                 # small models sometimes describe a tool call in prose ("запускаю игру") instead of making it
                 nudges += 1
+                log.info("nudging the model to call a tool instead of describing it: %r", gen.content[:200])
                 await emit({"type": "reset"})
                 messages = messages + [
                     {"role": "assistant", "content": gen.content},
