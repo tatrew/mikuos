@@ -44,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
         "runtime_rules": "prompts/runtime_rules.txt",
         "lore_seed": "prompts/character_lore.json",
         "screenshots": "data/screenshots",
+        "models": "data/models",  # downloaded speech models (whisper, silero)
         "logs": "data/logs",
         "runtime": "data/runtime",
     },
@@ -89,6 +90,21 @@ DEFAULTS: dict[str, Any] = {
         "destructive": "ask",
         "web": "allow",  # open sites / searches in the default browser (http/https only)
         "media": "allow",  # Spotify play/pause/next/previous
+    },
+    "voice": {
+        "enabled": True,
+        # push-to-talk: press to start listening; it stops after a pause (or press again)
+        "hotkey": "ctrl+alt+space",
+        "hotkey_fallbacks": ["ctrl+alt+v"],
+        "stt_model": "small",  # faster-whisper: tiny | base | small | medium (CPU, int8)
+        "language": "ru",
+        "tts_speaker": "xenia",  # Silero: xenia | baya | kseniya | aidar | eugene
+        "speak_replies": "all",  # all (also typed chat) | voice (only voice turns) | off
+        "speak_initiative": True,
+        "volume": 1.0,
+        "silence_s": 1.2,
+        "max_record_s": 15,
+        "preload": True,  # load the models at start so the first press answers quickly
     },
     "web": {
         # {q} is replaced with the URL-encoded query

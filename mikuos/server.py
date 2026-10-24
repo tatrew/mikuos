@@ -86,6 +86,12 @@ class VoicePlayback(BaseModel):
     rms: float = Field(default=0, ge=0, le=1)
 
 
+def _speak_reply(c, text: str) -> None:
+    """Typed chat: also say the reply aloud when voice.speak_replies == "all"."""
+    if text and c.voice.available and c.voice.cfg.get("speak_replies", "all") == "all" and c.voice.state == "idle":
+        asyncio.create_task(c.voice.speak(text))
+
+
 def write_token(runtime_dir: Path) -> str:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     token = secrets.token_urlsafe(32)
@@ -175,6 +181,7 @@ def create_app(settings: Settings, core: MikuOS | None = None, token: str | None
             raise HTTPException(503, f"LM Studio unavailable: {e}")
         except LLMError as e:
             raise HTTPException(502, str(e))
+        _speak_reply(c, r.text)
         return {"text": r.text, "tool_events": r.tool_events, "pending_requests": r.pending_requests,
                 "executed": r.executed, "claim_corrected": r.claim_corrected, "conversation_id": c.conversation_id}
 
@@ -270,6 +277,20 @@ def create_app(settings: Settings, core: MikuOS | None = None, token: str | None
             raise HTTPException(400, "arguments must be an object")
         return await c.registry.execute_direct(name, args)
 
+    @app.post("/api/voice/toggle")
+    async def voice_toggle(c: MikuOS = Depends(core_)):
+        """The user pressed the microphone button: start listening / finish / stop talking."""
+        return {"result": c.voice.toggle(), **c.voice.status()}
+
+    @app.post("/api/voice/stop")
+    async def voice_stop(c: MikuOS = Depends(core_)):
+        c.voice.cancel()
+        return c.voice.status()
+
+    @app.get("/api/voice")
+    async def voice_status(c: MikuOS = Depends(core_)):
+        return c.voice.status()
+
     @app.post("/api/emergency_stop")
     async def estop(c: MikuOS = Depends(core_)):
         await c.emergency_stop()
@@ -360,6 +381,7 @@ def create_app(settings: Settings, core: MikuOS | None = None, token: str | None
             r = await c.chat(text, emit)
             await emit({"type": "done", "text": r.text, "pending_requests": r.pending_requests,
                         "executed": [e["tool"] for e in r.executed], "claim_corrected": r.claim_corrected})
+            _speak_reply(c, r.text)
         except LLMUnavailable as e:
             await emit({"type": "error", "code": "llm_unavailable", "message": f"LM Studio недоступен: {e}"})
         except Exception as e:  # noqa: BLE001

@@ -329,7 +329,7 @@ def test_sprite_avatar_renders_every_state_mirrors_and_masks(qapp):
         assert any(img.pixelColor(x, img.height() - 1).alpha() for x in range(img.width())), st
     # talking switches to the mouth frames
     w.talk(1.0)
-    assert r.pick(State.IDLE, 0)[0] in (53, 61)
+    assert r.pick(State.IDLE, 0)[0] in (53, 64)
     r.talk_until = 0
     w.move(50, 50)
     w.show()
@@ -464,3 +464,22 @@ def test_overlay_cursor_prank_needs_consent_and_lets_go(qapp, tmp_settings):
         ov.pet.close()
         ov.chat.close()
         ov.tray.hide()
+
+
+def test_sprite_mouth_follows_voice_energy(qapp):
+    from mikuos_client.sprite_renderer import MOUTH_OPEN_RMS, TALK, available, sprite_window
+    if not available():
+        pytest.skip("sprites not in assets/sprites")
+    pet = sprite_window(1.0, 2)
+    r = pet.renderer
+    assert r.pick(State.IDLE, 0)[0] != TALK.frames[1]
+    pet.voice.event({"event": "start", "stream_id": "s1"})
+    pet.voice.event({"event": "energy", "stream_id": "s1", "rms": MOUTH_OPEN_RMS * 3})
+    assert r.pick(State.IDLE, 0)[0] == TALK.frames[1]  # loud -> open mouth
+    pet.voice.event({"event": "energy", "stream_id": "s1", "rms": 0.0})
+    assert r.pick(State.IDLE, 0)[0] == TALK.frames[0]  # silence between words -> closed
+    pet.voice.event({"event": "energy", "stream_id": "old", "rms": 1.0})  # stale stream ignored
+    assert r.pick(State.IDLE, 0)[0] == TALK.frames[0]
+    pet.voice.event({"event": "end", "stream_id": "s1"})
+    assert r.pick(State.IDLE, 0)[0][0] == "idle"  # back to the idle GIF loop
+    pet.close()

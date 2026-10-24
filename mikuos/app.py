@@ -73,6 +73,12 @@ class MikuOS:
         self._extract_lock = asyncio.Lock()
         self.enable_hotkey = enable_hotkey
         self.hotkey = None
+        self.voice_hotkey = None
+        from .voice import VoiceService
+        self.voice = VoiceService(settings, self.bus, self._voice_chat, settings.resolve_path("models"),
+                                  blocked=lambda: self.perms.emergency_stopped)
+        self.bus.subscribe("initiative_message", self._speak_event)
+        self.bus.subscribe("assistant_message", self._speak_event)
         self.started_at = datetime.now().astimezone()
 
     # ----------------------------------------------------------- lifecycle
@@ -98,6 +104,10 @@ class MikuOS:
         self.observer.start()
         if self.enable_hotkey:
             self._start_hotkey(loop)
+            if self.voice.available:
+                self._start_voice_hotkey(loop)
+        if self.voice.available and self.voice.cfg.get("preload", True):
+            self._tasks.append(asyncio.create_task(self._preload_voice(), name="voice-preload"))
         self.store.add_event("app_started", {"model": self.llm.status.model})
         await self.bus.publish("status", self.status())
 
@@ -109,6 +119,9 @@ class MikuOS:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         if self.hotkey:
             self.hotkey.stop()
+        if self.voice_hotkey:
+            self.voice_hotkey.stop()
+        self.voice.cancel()
         self.store.add_event("app_stopped", {})
         await self.llm.aclose()
         self.db.close()
@@ -120,6 +133,44 @@ class MikuOS:
                                      fallbacks=self.settings.get("hotkey", "fallbacks") or [])
         if not self.hotkey.start():
             log.warning("emergency hotkey not registered: %s", self.hotkey.error)
+
+    def _start_voice_hotkey(self, loop: asyncio.AbstractEventLoop) -> None:
+        from .hotkey import HotkeyListener
+        cfg = self.voice.cfg
+        try:  # optional: a bad setting must not stop the backend
+            self.voice_hotkey = HotkeyListener(cfg.get("hotkey") or "ctrl+alt+space",
+                                               lambda: loop.call_soon_threadsafe(self.voice.toggle),
+                                               hotkey_id=2, fallbacks=cfg.get("hotkey_fallbacks") or [],
+                                               purpose="voice")
+        except ValueError as e:
+            log.warning("voice hotkey disabled: %s", e)
+            return
+        if not self.voice_hotkey.start():
+            log.warning("voice hotkey not registered: %s", self.voice_hotkey.error)
+
+    async def _preload_voice(self) -> None:
+        try:
+            await asyncio.to_thread(self.voice.stt.load)
+            await asyncio.to_thread(self.voice.tts.load)
+            log.info("voice models loaded")
+            await self.bus.publish("voice_state", {"state": self.voice.state, "ready": True})
+        except Exception as e:  # noqa: BLE001 - voice is optional, the rest keeps working
+            self.voice.last_error = str(e)
+            log.exception("voice models failed to load")
+
+    async def _voice_chat(self, text: str) -> str:
+        return (await self.chat(text)).text
+
+    async def _speak_event(self, ev) -> None:
+        """Say Miku's own lines aloud: initiative messages and action reports
+        (voice turns speak themselves; typed-chat replies are spoken by the server)."""
+        d = ev.data
+        if not d.get("text") or d.get("kind") == "voice_reply" or self.voice.cfg.get("speak_replies", "all") == "off":
+            return
+        if ev.type == "initiative_message" and not self.voice.cfg.get("speak_initiative", True):
+            return
+        if self.voice.available and self.voice.state == "idle":
+            asyncio.create_task(self.voice.speak(d["text"]))
 
     def _recover_conversation(self) -> None:
         """Resume the last open conversation if it is recent, close stale ones."""
@@ -303,6 +354,7 @@ class MikuOS:
 
     # ------------------------------------------------------------- control
     async def emergency_stop(self) -> None:
+        self.voice.cancel()
         self.perms.emergency_stop()
         self.settings.update({"permissions": {"cursor_control": "deny"}})
         self.store.add_event("emergency_stop", {})
@@ -338,6 +390,8 @@ class MikuOS:
                        "active": self.hotkey.active_spec if self.hotkey else None,
                        "registered": bool(self.hotkey and self.hotkey.registered),
                        "error": self.hotkey.error if self.hotkey else None},
+            "voice": {**self.voice.status(),
+                      "hotkey_active": self.voice_hotkey.active_spec if self.voice_hotkey else None},
             "tools": [t.name for t in self.registry.available()],
             "system_prompt": str(self.prompts.system_prompt_path),
             "started_at": self.started_at.isoformat(timespec="seconds"),

@@ -1,0 +1,6 @@
+# optional voice: speech recognition (faster-whisper) and synthesis (Silero TTS)
+# torch is installed separately from the CPU-only index (see run_mikuos.ps1 -Install):
+#   uv pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+faster-whisper==1.2.1
+sounddevice==0.5.6
+numpy==2.5.4

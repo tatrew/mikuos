@@ -27,6 +27,10 @@ class ChatWindow(QWidget):
         self.input = QLineEdit()
         self.input.setPlaceholderText("Напиши Мику…")
         self.send_btn = QPushButton("Отправить")
+        self.mic_btn = QPushButton("🎤")
+        self.mic_btn.setToolTip("Сказать голосом (горячая клавиша — в меню Мику). "
+                                "Микрофон включается только по нажатию.")
+        self.mic_btn.setFixedWidth(40)
         self.requests = QListWidget()
         self.requests.setMaximumHeight(110)
         self.req_label = QLabel("Ожидают подтверждения:")
@@ -35,6 +39,7 @@ class ChatWindow(QWidget):
 
         row = QHBoxLayout()
         row.addWidget(self.input, 1)
+        row.addWidget(self.mic_btn)
         row.addWidget(self.send_btn)
         req_row = QHBoxLayout()
         req_row.addWidget(approve)
@@ -51,6 +56,7 @@ class ChatWindow(QWidget):
         lay.addLayout(row)
 
         self.send_btn.clicked.connect(self.send)
+        self.mic_btn.clicked.connect(self.toggle_voice)
         self.input.returnPressed.connect(self.send)
         approve.clicked.connect(lambda: self._resolve(True))
         deny.clicked.connect(lambda: self._resolve(False))
@@ -92,6 +98,7 @@ class ChatWindow(QWidget):
         online = st == ConnState.ONLINE
         self.send_btn.setEnabled(online)
         self.input.setEnabled(online)
+        self.mic_btn.setEnabled(online)
         if st != ConnState.BACKEND_OFFLINE:
             self.refresh_requests()
 
@@ -106,6 +113,13 @@ class ChatWindow(QWidget):
         self._append("Ты", text, "#2c3e50")
         self._start_stream()
         self.send_btn.setEnabled(False)
+
+    def toggle_voice(self) -> None:
+        def done(r):
+            if isinstance(r, dict) and r.get("result") in ("unavailable", "blocked"):
+                self._sys("Голос недоступен: " + ("аварийная остановка" if r["result"] == "blocked"
+                                                  else "не установлены компоненты голоса"))
+        self.backend.post("/api/voice/toggle", {}, done)
 
     def _start_stream(self) -> None:
         self.entries.append(("Мику", "", "#1f8f88"))
@@ -156,6 +170,16 @@ class ChatWindow(QWidget):
         t, d = ev.get("type"), ev.get("data", {})
         if t in ("initiative_message", "assistant_message"):
             self._append("Мику", d.get("text", ""), "#1f8f88")
+        elif t == "voice_transcript":
+            self._append("Ты 🎤", d.get("text", ""), "#2c3e50")
+        elif t == "voice_state":
+            st = d.get("state")
+            self.mic_btn.setText({"listening": "⏺", "recognizing": "…", "thinking": "…",
+                                  "speaking": "🔊"}.get(st, "🎤"))
+            if st == "idle" and d.get("result") == "no_speech":
+                self._sys("Мику ничего не расслышала.")
+        elif t == "voice_error":
+            self._sys(f"Ошибка голоса: {d.get('error')}")
         elif t == "permission_request":
             self.refresh_requests()
             self.show()

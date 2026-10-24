@@ -21,14 +21,21 @@ $pyw = Join-Path $PSScriptRoot ".venv\Scripts\pythonw.exe"
 function Ensure-Venv {
     if ((Test-Path $py) -and -not $Install) { return }
     Write-Host "Creating Python 3.12 environment..." -ForegroundColor Cyan
+    $torch = @("torch==2.14.1", "--index-url", "https://download.pytorch.org/whl/cpu")  # CPU build, keeps VRAM for LM Studio
     if (Get-Command uv -ErrorAction SilentlyContinue) {
         uv venv --python 3.12 .venv
         uv pip install --python $py -r requirements.txt
+        if ($LASTEXITCODE -ne 0) { throw "dependency installation failed" }
+        uv pip install --python $py -r requirements-voice.txt
+        if ($LASTEXITCODE -eq 0) { uv pip install --python $py @torch }
     } else {
         py -3.12 -m venv .venv
         & $py -m pip install -r requirements.txt
+        if ($LASTEXITCODE -ne 0) { throw "dependency installation failed" }
+        & $py -m pip install -r requirements-voice.txt
+        if ($LASTEXITCODE -eq 0) { & $py -m pip install @torch }
     }
-    if ($LASTEXITCODE -ne 0) { throw "dependency installation failed" }
+    if ($LASTEXITCODE -ne 0) { Write-Warning "voice components were not installed: MikuOS works without voice" }
 }
 
 function Ensure-LmStudio {

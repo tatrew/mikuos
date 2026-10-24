@@ -12,6 +12,7 @@ import ctypes
 import os
 import re
 import time
+from _ctypes import COMError
 from ctypes import wintypes
 from urllib.parse import quote
 
@@ -129,7 +130,14 @@ class Spotify:
         """The first result row inside Spotify's "Search results" area (its accessible name
         is not localized): {element: play button, title, playing, rid: row id}.
         The first row's button is named just "Слушать"/"Play" (or "Пауза"/"Pause" when
-        that track is the one playing); the title then comes from the row itself."""
+        that track is the one playing); the title then comes from the row itself.
+        None while there are no results or Spotify is re-rendering the list."""
+        try:
+            return self._read_first_result(hwnd)
+        except COMError:  # an element vanished mid-read: the caller polls again
+            return None
+
+    def _read_first_result(self, hwnd: int) -> dict | None:
         uia, mod = self._uia()
         root = uia.ElementFromHandle(hwnd)
         area = root.FindFirst(4, uia.CreatePropertyCondition(30005, "Search results"))  # UIA_NamePropertyId

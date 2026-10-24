@@ -334,6 +334,8 @@ class OverlayApp:
                 return
             if t == 'voice_playback' and hasattr(self.pet, 'voice'):
                 self.pet.voice.event(d)
+                if d.get('event') in ('start', 'energy'):
+                    self._hold_still_while_speaking()
             else:
                 if hasattr(self.pet, 'emotion'):
                     self.pet.emotion.command(d)
@@ -344,10 +346,30 @@ class OverlayApp:
             self.bubble.say(d["text"], QPoint(self.pet.x() + self.pet.width() // 2, self.pet.y() + self.pet.head_offset))
             if hasattr(self.pet, "talk"):
                 self.pet.talk(min(8.0, 0.06 * len(d["text"])))
+        elif t == "voice_state":
+            st = d.get("state")
+            self.pet.listening = st == "listening"
+            self.pet.update()
+            pos = QPoint(self.pet.x() + self.pet.width() // 2, self.pet.y() + self.pet.head_offset)
+            if st == "listening":
+                self.bubble.say("Слушаю… 🎤", pos)
+            elif st in ("recognizing", "thinking"):
+                self.bubble.say("…", pos)
+            elif st == "idle" and d.get("result") == "no_speech":
+                self.bubble.say("Не расслышала…", pos)
         elif t == "emergency_stop":
             self._apply_estop(bool(d.get("active")))
         elif t == "settings_changed":
             self.backend.get("/api/settings", self._on_settings)
+
+    def _hold_still_while_speaking(self) -> None:
+        """Talking Miku stops walking (the walk cycle has no mouth frames) and does not
+        start a new wander until she has finished the phrase."""
+        c = self.ctrl
+        if c.anim.state in (State.WALK, State.RUN) and c.support is not None and not c.pranking:
+            c.target_x = None
+            c.anim.set(State.IDLE, force=True)
+        c.decision_timer = max(c.decision_timer, 1.5)
 
     def _apply_estop(self, active: bool) -> None:
         self.estop = active
@@ -376,6 +398,9 @@ class OverlayApp:
     def _build_menu(self) -> QMenu:
         m = QMenu()
         m.addAction("Открыть чат", self.open_chat)
+        vhk = (self.backend.status.get("voice") or {}).get("hotkey_active")
+        m.addAction("🎤 Сказать голосом" + (f" ({vhk})" if vhk else ""),
+                    lambda: self.backend.post("/api/voice/toggle", {}))
         m.addAction("Настройки…", self.open_settings)
         modes = m.addMenu("Инициативность")
         for key, label in [("chatty", "Болтливая"), ("normal", "Обычная"), ("quiet", "Тихая"),

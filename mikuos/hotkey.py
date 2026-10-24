@@ -11,6 +11,9 @@ log = logging.getLogger("mikuos.hotkey")
 
 MOD = {"alt": 0x0001, "ctrl": 0x0002, "shift": 0x0004, "win": 0x0008}
 MOD_NOREPEAT = 0x4000
+NAMED_KEYS = {"space": 0x20, "enter": 0x0D, "tab": 0x09, "esc": 0x1B, "escape": 0x1B, "backspace": 0x08,
+              "insert": 0x2D, "delete": 0x2E, "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
+              "pause": 0x13}
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 
@@ -25,6 +28,8 @@ def parse_hotkey(spec: str) -> tuple[int, int]:
             key = ord(p.upper())
         elif p.startswith("f") and p[1:].isdigit():
             key = 0x70 + int(p[1:]) - 1
+        elif p in NAMED_KEYS:
+            key = NAMED_KEYS[p]
         else:
             raise ValueError(f"unsupported key '{p}' in hotkey '{spec}'")
     if key is None or not mods:
@@ -36,7 +41,8 @@ class HotkeyListener:
     """Registers the first free combination from `spec` + `fallbacks`."""
 
     def __init__(self, spec: str, callback: Callable[[], None], hotkey_id: int = 0x4D49,
-                 fallbacks: list[str] | None = None):
+                 fallbacks: list[str] | None = None, purpose: str = "emergency"):
+        self.purpose = purpose  # for log messages only
         self.candidates = [spec] + [f for f in (fallbacks or []) if f != spec]
         for c in self.candidates:
             parse_hotkey(c)  # validate early
@@ -71,7 +77,8 @@ class HotkeyListener:
             self._ready.set()
             return
         if errors:
-            log.warning("emergency hotkey %s is taken (%s); using %s", self.candidates[0], errors[0], self.active_spec)
+            log.warning("%s hotkey %s is taken (%s); using %s", self.purpose, self.candidates[0], errors[0],
+                        self.active_spec)
         self.registered = True
         self._ready.set()
         msg = wintypes.MSG()

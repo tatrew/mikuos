@@ -58,7 +58,8 @@ ANIMS: dict[State, Anim] = {
     State.SURPRISED: Anim((50, 29), 4, loop=False),
     State.SAD: Anim((59,), 1, mirror=False),
 }
-TALK = Anim((53, 61), 6, mirror=False)  # mouth closed / open while a line is shown
+TALK = Anim((53, 64), 6, mirror=False)  # same front pose, mouth closed / open: only the mouth moves
+MOUTH_OPEN_RMS = 0.08  # voice_playback energy above which the open-mouth frame is shown
 
 
 def available() -> bool:
@@ -141,6 +142,7 @@ class SpriteRenderer:
     def __init__(self, scale: int = 2, sheet: Path = SHEET, idle_gif: Path = IDLE_GIF):
         self.scale = max(1, int(scale))
         self.talk_until = 0.0
+        self.voice = None  # VoiceAnimationController while speech audio plays
         sheet_img = QImage(str(sheet)).convertToFormat(QImage.Format_ARGB32)
         if sheet_img.isNull():
             raise FileNotFoundError(sheet)
@@ -198,6 +200,10 @@ class SpriteRenderer:
 
     def pick(self, state: State, t: float) -> tuple[object, bool]:
         """(frame id, mirror allowed) for a state at time t since the state began."""
+        voice = self.voice
+        if voice is not None and voice.active and state in (State.IDLE, State.LOOK, State.SIT, State.SITTING_IDLE):
+            # spoken reply: mouth follows the loudness of the audio actually playing
+            return TALK.frames[1 if voice.energy > MOUTH_OPEN_RMS else 0], TALK.mirror
         talking = state == State.IDLE and time.monotonic() < self.talk_until
         anim = TALK if talking else ANIMS.get(state, ANIMS[State.IDLE])
         if talking:
@@ -229,11 +235,21 @@ class SpriteRenderer:
 
 
 def sprite_window(scale: float = 1.0, pixel_scale: int = 2):
+    from .expression import VoiceAnimationController
     from .pet_window import PetWindow
 
+    class SpritePetWindow(PetWindow):
+        def set_view(self, state, frame, facing, look, t):
+            now = time.monotonic()
+            self.voice.update(min(0.1, now - self._last_view))
+            self._last_view = now
+            super().set_view(state, frame, facing, look, t)
+
     r = SpriteRenderer(max(1, round(pixel_scale * scale)))
-    pet = PetWindow(r)
+    pet = SpritePetWindow(r)
     pet.head_offset = r.head_offset
+    pet.voice = r.voice = VoiceAnimationController()  # fed by voice_playback events (app.py)
+    pet._last_view = time.monotonic()
 
     def talk(seconds: float) -> None:  # mouth moves while a line is shown in the bubble
         r.talk_until = max(r.talk_until, time.monotonic() + max(0.5, seconds))

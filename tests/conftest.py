@@ -31,6 +31,7 @@ def tmp_settings(tmp_path) -> Settings:
                   "runtime": str(tmp_path / "runtime")},
         "allowed_directories": {"read": [str(sandbox)], "write": [str(sandbox)]},
         "observation": {"enabled": False},
+        "voice": {"preload": False, "speak_replies": "off", "speak_initiative": False},
     })
     return s
 

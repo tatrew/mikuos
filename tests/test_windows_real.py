@@ -398,3 +398,11 @@ async def test_spotify_play_tool(tmp_settings, tmp_path):
     assert sp.sent == [("play", "World is Mine")] * 2
     r = await reg.execute("spotify_play", {"query": "x"}, TurnState(origin=Origin.AUTONOMOUS))
     assert r["status"] == "denied"
+
+
+def test_hotkey_named_keys():
+    from mikuos.hotkey import parse_hotkey
+    assert parse_hotkey("ctrl+alt+space") == (0x0002 | 0x0001, 0x20)
+    assert parse_hotkey("ctrl+alt+v") == (0x0003, ord("V"))
+    with pytest.raises(ValueError):
+        parse_hotkey("ctrl+alt+spacebar")

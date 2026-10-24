@@ -44,6 +44,7 @@ class PetWindow(QWidget):
         self.t = 0.0
         self.conn = ConnState.BACKEND_OFFLINE
         self.observing = False
+        self.listening = False  # microphone is open (visible indicator)
         self.estop = False
         self.passive = False
         self._press: QPoint | None = None
@@ -84,6 +85,16 @@ class PetWindow(QWidget):
             p.drawEllipse(QRectF(w - 30, 4, 14, 9))
             p.setBrush(QColor("#1f8f88"))
             p.drawEllipse(QPointF(w - 23, 8.5), 2.2, 2.2)
+        if self.listening and not self.estop:  # red microphone: Miku is listening right now
+            p.setPen(QPen(QColor(0, 0, 0, 90), 1))
+            p.setBrush(QColor("#e74c3c"))
+            p.drawEllipse(QPointF(10, 10), 8, 8)
+            p.setPen(QPen(QColor("white"), 1.6))
+            p.setBrush(QColor("white"))
+            p.drawRoundedRect(QRectF(8, 4.5, 4, 7), 2, 2)
+            p.setBrush(Qt.NoBrush)
+            p.drawArc(QRectF(6, 6, 8, 8), 200 * 16, 140 * 16)
+            p.drawLine(QPointF(10, 14), QPointF(10, 16))
         if self.estop:
             p.setPen(QColor("#8e44ad"))
             p.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -100,7 +111,8 @@ class PetWindow(QWidget):
 
     def _update_mask(self) -> None:
         if hasattr(self.renderer, "mask_key"):  # frame-based renderers know when the silhouette changes
-            key = (self.renderer.mask_key(self.state, self.facing, self.t), self.estop, self.observing)
+            key = (self.renderer.mask_key(self.state, self.facing, self.t), self.estop, self.observing,
+                   self.listening)
         else:
             key = (self.state, self.frame, self.facing, int(self.t * 4) if self.state in (State.WALK, State.CHASE,
                                                                                              State.HAPPY) else 0)
