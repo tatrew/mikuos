@@ -27,9 +27,13 @@ log = logging.getLogger("mikuos.agent")
 
 ACTION_CLAIM = re.compile(
     r"\b(открыла|запустила|создала|записала|сохранила|свернула|развернула|переключила(?:сь)?|закрыла|удалила|"
-    r"нажала|переместила|i opened|i launched|i created|"
+    r"нажала|переместила|включила|выключила|поставила|нашла в интернете|i opened|i launched|i created|"
     # "doing it right now" phrasing: the model narrates an action instead of calling the tool
-    r"запускаю|открываю|удаляю|создаю|закрываю|сворачиваю|разворачиваю)\b",
+    r"запускаю|открываю|удаляю|создаю|закрываю|сворачиваю|разворачиваю|включаю|ставлю|"
+    # passive "it's done" phrasing (targeted: a bare "открыто" also describes read-only state)
+    r"пауза включена|(?:поставлена|поставлено|поставил[аи]?) на паузу|"
+    r"(?:трек|песня|музыка|воспроизведение) (?:переключ[её]н[аоы]?|включ[её]н[аоы]?|запущен[аоы]?|"
+    r"остановлен[аоы]?))\b",
     re.IGNORECASE,
 )
 # "I sent the command/request": true once a tool was actually called (ok or awaiting confirmation)

@@ -40,6 +40,8 @@ class Tool:
     handler: Callable[..., Any]
     timeout_s: float = 15
     untrusted_output: bool = False  # output contains third-party text (titles, files, UI)
+    # repeating the same call across turns is normal (e.g. "next track" twice): no 20 s duplicate guard
+    repeatable: bool = False
     # per-call escalation, e.g. overwriting an existing file -> Perm.DESTRUCTIVE
     escalate: Callable[[dict], Perm | None] | None = None
 
@@ -132,7 +134,7 @@ class ToolRegistry:
                                                  "error": "same action was already requested in this turn",
                                                  "previous": prev}, audit=False)
             return prev
-        if tool.side_effect:
+        if tool.side_effect and not tool.repeatable:
             last = self._recent_side_effects.get(sig)
             if last and time.monotonic() - last < self.duplicate_window_s:
                 res = {"status": "duplicate_skipped",

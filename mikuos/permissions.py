@@ -12,6 +12,7 @@ Pending "ask" requests are stored here until the user approves or denies them.
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import threading
 import time
@@ -20,6 +21,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from .config import Settings
 
@@ -35,11 +37,13 @@ class Perm(str, Enum):
     UI_ACTION = "ui_action"
     CURSOR_CONTROL = "cursor_control"
     DESTRUCTIVE = "destructive"  # deleting / uninstalling / overwriting: never runs without the user's OK
+    WEB = "web"  # open a web page / search in the default browser
+    MEDIA = "media"  # play / pause / switch tracks in Spotify
     NONE = "none"  # internal, always allowed (e.g. search own memory)
 
 
 SIDE_EFFECT_PERMS = {Perm.APP_CONTROL, Perm.WINDOW_CONTROL, Perm.FILE_WRITE, Perm.UI_ACTION, Perm.CURSOR_CONTROL,
-                     Perm.MEMORY_WRITE, Perm.DESTRUCTIVE}
+                     Perm.MEMORY_WRITE, Perm.DESTRUCTIVE, Perm.WEB, Perm.MEDIA}
 
 BLOCKED_OPEN_EXTENSIONS = {
     ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".msi", ".msp",
@@ -179,6 +183,37 @@ class PermissionManager:
                 return None, f"path does not exist: {resolved}"
             return resolved, ""
         return None, f"path is outside allowed {kind} directories: {resolved}"
+
+    @staticmethod
+    def check_url(raw: str) -> tuple[str | None, str]:
+        """Validate a model-supplied web address. Only public http(s) sites: no other
+        schemes, no credentials in the URL, no localhost / IP literals / local names
+        (the browser must not be pointed at MikuOS's own API or the home network)."""
+        raw = (raw or "").strip()
+        if not raw or len(raw) > 2000 or any(ch.isspace() or ord(ch) < 32 for ch in raw):
+            return None, "empty, too long or contains spaces/control characters"
+        if "://" not in raw:
+            raw = "https://" + raw
+        try:
+            u = urlsplit(raw)
+            host = (u.hostname or "").lower().rstrip(".")
+            u.port  # noqa: B018 - raises ValueError for a malformed port
+        except ValueError as e:
+            return None, f"malformed URL: {e}"
+        if u.scheme not in ("http", "https"):
+            return None, f"only http/https links can be opened (got '{u.scheme}')"
+        if u.username or u.password:
+            return None, "links with a login/password inside are not allowed"
+        if not host or "." not in host:
+            return None, "a public site name is required"
+        try:
+            ipaddress.ip_address(host.strip("[]"))
+            return None, "links to IP addresses are not allowed, use a site name"
+        except ValueError:
+            pass
+        if host == "localhost" or host.endswith((".localhost", ".local", ".lan", ".home", ".internal", ".arpa")):
+            return None, "local network addresses are not allowed"
+        return u.geturl(), ""
 
     @staticmethod
     def check_openable_file(path: Path) -> str:

@@ -243,8 +243,9 @@ async def test_send_claim_is_true_when_request_awaits_confirmation(tmp_settings)
 def test_claim_patterns():
     from mikuos.agent import claims_action
     for s in ["Для запуска DDLC снова отправляю команду.", "Команда на запуск отправлена.", "Сейчас запускаю игру!",
-              "Я отправила запрос на удаление «Dota 2»."]:
+              "Я отправила запрос на удаление «Dota 2».", "Пауза включена.", "Музыка поставлена на паузу.",
+              "Трек переключён."]:
         assert claims_action(s), s
     for s in ["Привет! Как дела?", "Хочешь, открою Блокнот?", "Я люблю отправлять открытки",
-              "Запустить игру можно через Steam."]:
+              "Запустить игру можно через Steam.", "Сейчас музыка на паузе.", "Окно Блокнота открыто."]:
         assert not claims_action(s), s

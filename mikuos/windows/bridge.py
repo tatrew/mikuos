@@ -519,6 +519,17 @@ class WindowsBridge:
         return {"x": x, "y": y}
 
     @staticmethod
+    def open_url(url: str) -> dict:
+        """Open an already validated http(s) URL in the default browser."""
+        if not url.startswith(("http://", "https://")):
+            raise WindowsBridgeError("only http/https URLs can be opened")
+        try:
+            os.startfile(url)
+        except OSError as e:
+            raise WindowsBridgeError(f"failed to open the browser: {e}") from e
+        return {"opened": url}
+
+    @staticmethod
     def mouse_button_down() -> bool:
         """Any mouse button held right now (the user may be dragging something).
         Reads button state only; keyboard keys are never queried."""

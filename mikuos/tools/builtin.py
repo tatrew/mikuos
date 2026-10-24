@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from ..config import Settings
 from ..memory import Candidate, MemoryManager, MemoryStore
 from ..permissions import Perm, PermissionManager
 from ..windows import WindowsBridge, WindowsBridgeError
+from ..windows.media import Spotify
 from ..windows.steam import Steam
 from .registry import Tool, ToolFailure, ToolRegistry
 
@@ -20,8 +22,10 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 
 
 def register_builtin_tools(reg: ToolRegistry, bridge: WindowsBridge, settings: Settings, store: MemoryStore,
-                           memory: MemoryManager, perms: PermissionManager, steam: Steam | None = None) -> None:
+                           memory: MemoryManager, perms: PermissionManager, steam: Steam | None = None,
+                           spotify: Spotify | None = None) -> None:
     steam = steam or Steam()
+    spotify = spotify or Spotify()
     agent_cfg = settings.get("agent")
     max_read = int(agent_cfg.get("max_file_read_chars", 20000))
     timeout = float(agent_cfg.get("tool_timeout_s", 15))
@@ -181,6 +185,42 @@ def register_builtin_tools(reg: ToolRegistry, bridge: WindowsBridge, settings: S
         reg.register(Tool("uninstall_steam_game",
                           "Удалить игру Steam. Всегда требует подтверждения пользователя.",
                           _obj({"game": GAME}, ["game"]), Perm.DESTRUCTIVE, wrap(uninstall_steam_game), timeout))
+
+    # --- web (default browser) ---------------------------------------------
+    def open_website(url: str):
+        u, why = perms.check_url(url)
+        if not u:
+            raise ToolFailure(why, "denied")
+        return bridge.open_url(u)
+
+    def web_search(query: str):
+        template = settings.get("web", "search_url") or "https://www.google.com/search?q={q}"
+        u, why = perms.check_url(template.replace("{q}", quote_plus(query)))
+        if not u:
+            raise ToolFailure(f"search_url setting is invalid: {why}", "denied")
+        return {"query": query, **bridge.open_url(u)}
+
+    reg.register(Tool("open_website", "Открыть сайт в браузере пользователя (только http/https).",
+                      _obj({"url": {"type": "string", "minLength": 3, "maxLength": 2000,
+                                    "description": "адрес сайта, например youtube.com или https://ru.wikipedia.org"}},
+                           ["url"]), Perm.WEB, wrap(open_website), timeout))
+    reg.register(Tool("web_search", "Открыть поиск в интернете по запросу в браузере пользователя.",
+                      _obj({"query": {"type": "string", "minLength": 1, "maxLength": 300}}, ["query"]),
+                      Perm.WEB, wrap(web_search), timeout))
+
+    # --- Spotify --------------------------------------------------------------
+    reg.register(Tool("spotify_now_playing", "Что сейчас играет в Spotify (исполнитель и трек).", _obj({}),
+                      Perm.OBSERVE_METADATA, wrap(spotify.now_playing), timeout, untrusted_output=True))
+    reg.register(Tool("spotify_control",
+                      "Управление Spotify: pause — пауза, play — продолжить, next — следующий трек, "
+                      "previous — предыдущий трек.",
+                      _obj({"action": {"type": "string", "enum": ["pause", "play", "next", "previous"]}}, ["action"]),
+                      Perm.MEDIA, wrap(lambda action: spotify.control(action)), timeout, repeatable=True))
+    reg.register(Tool("spotify_search", "Открыть в Spotify поиск музыки по запросу.",
+                      _obj({"query": {"type": "string", "minLength": 1, "maxLength": 200}}, ["query"]),
+                      Perm.MEDIA, wrap(lambda query: spotify.search(query)), timeout))
+    reg.register(Tool("open_spotify", "Запустить Spotify.", _obj({}), Perm.MEDIA, wrap(lambda: spotify.open()),
+                      max(timeout, 15)))
 
     # --- window content (separate permission + per-process allow list) ----
     def capture_window(window_id: int):

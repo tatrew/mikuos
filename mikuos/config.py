@@ -87,6 +87,12 @@ DEFAULTS: dict[str, Any] = {
         "cursor_control": "deny",
         # deleting / uninstalling / overwriting files: "ask" or "deny" ("allow" is treated as "ask")
         "destructive": "ask",
+        "web": "allow",  # open sites / searches in the default browser (http/https only)
+        "media": "allow",  # Spotify play/pause/next/previous
+    },
+    "web": {
+        # {q} is replaced with the URL-encoded query
+        "search_url": "https://www.google.com/search?q={q}",
     },
     "allowed_apps": {
         "notepad": {"title": "Блокнот", "path": "notepad.exe"},
