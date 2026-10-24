@@ -6,6 +6,7 @@ None of this calls the LLM; the backend is only used for chat, events and settin
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from pathlib import Path
@@ -54,7 +55,8 @@ class OverlayApp:
         self.bridge = bridge or WindowsBridge()
         ui = settings.get("ui")
         scale = float(ui.get("pet_scale", 1.0))
-        self.pet = self._make_pet(ui.get("avatar", "auto"), scale, int(ui.get("model_px", 220)))
+        self.pet = self._make_pet(ui.get("avatar", "auto"), scale, int(ui.get("model_px", 220)),
+                                  int(ui.get("sprite_scale", 2)))
         self.ctrl = AvatarController(self.pet.width(), self.pet.foot_offset,
                                      AvatarSettings(walk_speed=float(ui.get("walk_speed", 90)),
                                                     cursor_chase=bool(ui.get("cursor_chase", True))))
@@ -68,9 +70,8 @@ class OverlayApp:
         self._last_tick = time.monotonic()
         self._last_track = 0.0
         self._last_fs_check = 0.0
-        self._last_cursor_tease = 0.0
-        self._cursor_allow_until = 0.0
-        self._cursor_permission = False
+        self._last_prank = -1e9
+        self._prank_cursor: tuple[int, int] | None = None
         self.frames = 0  # for tests: proves the animation loop keeps running
         self.hotkey = None
         self._visual_offset = [0.0, 0.0]
@@ -103,9 +104,19 @@ class OverlayApp:
         self.timer.timeout.connect(self.tick)
 
     @staticmethod
-    def _make_pet(kind: str, scale: float, model_px: int):
-        """3D Miku when the converted model exists (tools/build_miku3d.py), else the placeholder."""
-        if kind in ("auto", "3d"):
+    def _make_pet(kind: str, scale: float, model_px: int, sprite_scale: int = 2):
+        """2D sprites when assets/sprites exists, else 3D Miku when the converted model exists
+        (tools/build_miku3d.py), else the vector placeholder."""
+        if kind in ("auto", "sprite"):
+            from .sprite_renderer import available, sprite_window
+            if available():
+                try:
+                    return sprite_window(scale, sprite_scale)
+                except Exception:
+                    log.exception("sprite avatar failed to load")
+            elif kind == "sprite":
+                log.warning("sprites not found in assets/sprites; trying the next avatar")
+        if kind in ("auto", "3d", "sprite"):
             from .pet3d_window import Pet3DWindow, model_available
             if model_available():
                 try:
@@ -187,7 +198,7 @@ class OverlayApp:
             cursor = None if self.estop else self._cursor()
             idle = self.bridge.get_user_idle_time()
             self.ctrl.update(dt, cursor, idle)
-            self._maybe_tease_cursor(cursor)
+            self._cursor_prank(cursor)
         except Exception:
             log.exception("tick failed")
         x, y = self.ctrl.top_left
@@ -227,19 +238,46 @@ class OverlayApp:
             self.hidden_for_fullscreen = False
             self.pet.show()
 
-    def _maybe_tease_cursor(self, cursor) -> None:
-        """Real cursor movement: only with explicit consent (cursor_control=allow
-        in the backend) and never during emergency stop or when offline."""
-        if (cursor is None or self.estop or self.ctrl.anim.state != State.CHASE
-                or self.backend.state == ConnState.BACKEND_OFFLINE):
+    def _cursor_prank_allowed(self) -> bool:
+        """Real cursor movement needs the user's consent (cursor_control=allow, off by
+        default, confirmed in Settings) and is never done while a mouse button is held,
+        in full-screen apps, offline or during emergency stop."""
+        return (not self.estop and not self.hidden_for_fullscreen and self.prank_enabled
+                and self.backend.state != ConnState.BACKEND_OFFLINE
+                and (self.backend.status.get("cursor_control") or "deny") == "allow"
+                and not self.bridge.mouse_button_down())
+
+    def _cursor_prank(self, cursor) -> None:
+        """Grab the cursor when she catches it and run away with it for a moment.
+        A sharp pull of the mouse frees it; she releases it on her own after a few seconds."""
+        c = self.ctrl
+        if cursor is None:
             return
-        perms = (self.backend.status.get("cursor_control") or "deny")
-        if (perms != "allow" or time.monotonic() >= self._cursor_allow_until
-                or time.monotonic() - self._last_cursor_tease < 15):
+        if c.pranking:
+            if not self._cursor_prank_allowed():
+                c.end_prank("interrupted")
+            elif self._prank_cursor and math.dist(cursor, self._prank_cursor) > c.cfg.prank_escape_px:
+                c.end_prank("escaped")
+            else:
+                g = QApplication.primaryScreen().virtualGeometry()
+                hx = min(max(round(c.hand[0]), g.left()), g.right())
+                hy = min(max(round(c.hand[1]), g.top()), g.bottom())
+                self.bridge.set_cursor_position(hx, hy)
+                self._prank_cursor = (hx, hy)
+                return
+            log.info("cursor prank ended: %s", c.prank_result)
+            self._prank_cursor = None
             return
-        if abs(cursor[0] - self.ctrl.x) < self.ctrl.w * 0.35:
-            self._last_cursor_tease = time.monotonic()
-            self.bridge.set_cursor_position(int(cursor[0] + 40 * self.ctrl.facing), int(cursor[1]))
+        self._prank_cursor = None
+        now = time.monotonic()
+        if (c.anim.state != State.CHASE or now - self._last_prank < self.prank_cooldown_s
+                or math.dist(cursor, c.hand) > c.w * 0.3):
+            return
+        # caught it: one roll per catch, then wait a little before rolling again
+        self._last_prank = now - self.prank_cooldown_s + 8
+        if c.rng.random() < self.prank_chance and self._cursor_prank_allowed() and c.start_prank():
+            self._last_prank = now
+            log.info("cursor prank: Miku grabbed the cursor")
 
     # ------------------------------------------------------------- events
     def _on_click(self) -> None:
@@ -267,10 +305,6 @@ class OverlayApp:
 
     def _on_settings(self, s) -> None:
         if isinstance(s, dict) and "permissions" in s:
-            allowed = s['permissions'].get('cursor_control') == 'allow'
-            if allowed and not self._cursor_permission:
-                self._cursor_allow_until = time.monotonic() + 120
-            self._cursor_permission = allowed
             self.backend.status["cursor_control"] = s["permissions"].get("cursor_control", "deny")
             self.ctrl.cfg.cursor_chase = bool(s.get("ui", {}).get("cursor_chase", True))
             self._configure_visual(s.get('ui', {}))
@@ -280,6 +314,9 @@ class OverlayApp:
         self.background_fps = finite(ui.get('background_fps', 10), 10, 5, self.fps)
         self.ctrl.cfg.walk_speed = finite(ui.get('walk_speed', 90), 90, 20, 240)
         self.ctrl.cfg.idle_cooldown_s = finite(ui.get('idle_cooldown_s', 4), 4, 1, 120)
+        self.prank_enabled = bool(ui.get('cursor_prank', True))
+        self.prank_cooldown_s = finite(ui.get('cursor_prank_cooldown_s', 120), 120, 20, 3600)
+        self.prank_chance = finite(ui.get('cursor_prank_chance', 0.5), 0.5, 0, 1)
         for key in ('walk_probability', 'jump_probability', 'sit_probability'):
             setattr(self.ctrl.cfg, key, finite(ui.get(key, getattr(self.ctrl.cfg, key))))
         if hasattr(self.pet, 'hair'):
@@ -318,7 +355,7 @@ class OverlayApp:
         self.pet.set_passive(active)
         self.ctrl.paused = active
         if active:
-            self._cursor_allow_until = 0
+            self.ctrl.end_prank("interrupted")
             self.ctrl.pending_action = None
             if hasattr(self.pet, 'voice'):
                 self.pet.voice.active = False

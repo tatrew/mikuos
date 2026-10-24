@@ -13,6 +13,8 @@ config/settings.json
 # third-party character model (Project SEKAI assets, personal use only, do not publish)
 assets/miku_model/
 assets/miku3d/
+# third-party fan-made 2D sprites (unknown license)
+assets/sprites/
 
 # model training material: weights, adapters, datasets (large and/or not redistributable)
 miku_gemma4_run/

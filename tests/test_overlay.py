@@ -285,3 +285,182 @@ def test_3d_avatar_loads_switches_animations_and_masks(qapp):
         assert w.cursor_controller.hand.property('scenePosition').length() < 2
     finally:
         w.close()
+
+
+@pytest.mark.desktop
+def test_sprite_avatar_renders_every_state_mirrors_and_masks(qapp):
+    from PySide6.QtTest import QTest
+
+    from mikuos_client.app import OverlayApp
+    from mikuos_client.sprite_renderer import ANIMS, available
+    if not available():
+        pytest.skip("sprites not in assets/sprites")
+    w = OverlayApp._make_pet("auto", 1.0, 220, 2)
+    assert type(w.renderer).__name__ == "SpriteRenderer"  # auto prefers the 2D sprites
+    r = w.renderer
+    # every state has frames; one-shot clips hold their last frame
+    for st in State:
+        assert st in ANIMS, f"no sprite animation for {st}"
+    jump_end, _ = r.pick(State.JUMP, 99)
+    assert jump_end == ANIMS[State.JUMP].frames[-1]
+    # idle is the GIF loop (frames change over time)
+    assert len({r.pick(State.IDLE, t / 10)[0] for t in range(20)}) > 5
+    from PySide6.QtGui import QImage, QPainter
+
+    def shot(state, facing, t=0.0):
+        img = QImage(*r.size(), QImage.Format_ARGB32)
+        img.fill(0)
+        p = QPainter(img)
+        r.paint(p, state, 0, facing, None, t)
+        p.end()
+        return img
+
+    def columns(img):  # opaque pixel count per column
+        return [sum(1 for y in range(img.height()) if img.pixelColor(x, y).alpha()) for x in range(img.width())]
+
+    # walking left is the mirror image of walking right (up to 1 px of anchor rounding)
+    right, left = columns(shot(State.WALK, 1)), columns(shot(State.WALK, -1))
+    assert right != left
+    assert min(sum(abs(a - b) for a, b in zip(right[::-1][d:], left)) for d in (0, 1, 2)) < 0.05 * sum(right)
+    # the sheet background is keyed out and feet stand on the bottom row
+    for st in (State.WALK, State.SLEEP, State.DRAG, State.HAPPY):
+        img = shot(st, 1)
+        assert img.pixelColor(2, 2).alpha() == 0
+        assert any(img.pixelColor(x, img.height() - 1).alpha() for x in range(img.width())), st
+    # talking switches to the mouth frames
+    w.talk(1.0)
+    assert r.pick(State.IDLE, 0)[0] in (53, 61)
+    r.talk_until = 0
+    w.move(50, 50)
+    w.show()
+    try:
+        w.set_view(State.IDLE, 0, 1, None, 0)
+        QTest.qWait(100)
+        mask = w.mask()
+        assert not mask.isEmpty()
+        area = sum(rr.width() * rr.height() for rr in mask)
+        assert area < 0.6 * w.width() * w.height()  # clicks pass through around her
+        before = mask.boundingRect()
+        w.set_view(State.SLEEP, 0, 1, None, 0)
+        QTest.qWait(100)
+        assert w.mask().boundingRect() != before  # mask follows the silhouette
+    finally:
+        w.close()
+
+
+def _grounded(x=900.0):
+    floor = Surface(1000, 0, 1920)
+    a = AvatarController(120, 150, rng=random.Random(3))
+    a.set_surfaces([floor])
+    a.place(x, 990)
+    for _ in range(60):
+        a.update(0.033)
+    assert a.support == floor
+    return a
+
+
+def test_cursor_prank_runs_away_and_ends_by_itself():
+    a = _grounded(1500)
+    assert a.start_prank()
+    assert a.pranking and a.anim.state == State.RUN and a.facing == -1  # more room on the left
+    hx, hy = a.hand
+    assert hx < a.x and 1000 - 150 < hy < 1000  # held in front of her at chest height
+    start = a.x
+    for _ in range(int(a.cfg.prank_duration_s / 0.033) + 5):
+        a.update(0.033, cursor=a.hand)
+    assert not a.pranking and a.prank_result == "done" and a.anim.state == State.HAPPY
+    assert start - a.x > a.w  # actually ran off with it
+    assert 0 + a.w / 2 <= a.x  # stayed on the surface
+
+
+def test_cursor_prank_escape_and_interruptions():
+    a = _grounded()
+    assert a.start_prank() and not a.start_prank()  # one at a time
+    a.end_prank("escaped")
+    assert a.prank_result == "escaped" and a.anim.state == State.SAD
+    a.anim.set(State.IDLE, force=True)
+    assert a.start_prank()
+    a.start_drag()  # the user grabs Miku herself
+    assert not a.pranking and a.prank_result == "interrupted"
+    a.end_drag()
+    a.set_surfaces([Surface(1000, 0, 200)])  # too narrow to run anywhere
+    for _ in range(60):
+        a.update(0.033)
+    assert not a.start_prank()
+    a.paused = True  # emergency stop
+    assert not a.start_prank()
+
+
+@pytest.mark.desktop
+def test_overlay_cursor_prank_needs_consent_and_lets_go(qapp, tmp_settings):
+    """The real OverlayApp logic, with the cursor-moving call recorded instead of executed."""
+    from mikuos_client.app import OverlayApp
+    from mikuos_client.backend_client import ConnState
+    from mikuos.windows import WindowsBridge
+
+    class RecBridge(WindowsBridge):
+        def __init__(self):
+            super().__init__()
+            self.moves, self.button = [], False
+
+        def set_cursor_position(self, x, y):
+            self.moves.append((x, y))
+            return {"x": x, "y": y}
+
+        def mouse_button_down(self):
+            return self.button
+
+    tmp_settings.update({"hotkey": {"emergency_stop": "ctrl+alt+shift+f10", "fallbacks": []},
+                         "ui": {"cursor_prank_chance": 1.0}})
+    br = RecBridge()
+    ov = OverlayApp(qapp, tmp_settings, bridge=br)
+    try:
+        c = ov.ctrl
+        c.set_surfaces([Surface(1000, 0, 1920)])
+        c.place(900, 990)
+        for _ in range(60):
+            c.update(0.033)
+        ov.backend.state = ConnState.ONLINE
+
+        def catch():
+            c.anim.set(State.CHASE, force=True)
+            ov._cursor_prank(c.hand)
+
+        # no consent (default cursor_control=deny): she never grabs it
+        ov.backend.status["cursor_control"] = "deny"
+        catch()
+        assert not c.pranking and br.moves == []
+        # consent given, but a mouse button is held: still hands off
+        ov.backend.status["cursor_control"] = "allow"
+        br.button = True
+        ov._last_prank = -1e9
+        catch()
+        assert not c.pranking and br.moves == []
+        # consent and free hands: grab, carry, cursor follows her hand
+        br.button = False
+        ov._last_prank = -1e9
+        catch()
+        assert c.pranking
+        for _ in range(5):
+            c.update(0.033)
+            ov._cursor_prank(br.moves[-1] if br.moves else c.hand)
+        assert len(br.moves) >= 4 and br.moves[-1] != br.moves[0]
+        # the user yanks the mouse away: released immediately, no more moves
+        n = len(br.moves)
+        yank = (br.moves[-1][0] + 200, br.moves[-1][1] - 150)
+        ov._cursor_prank(yank)
+        assert not c.pranking and c.prank_result == "escaped" and len(br.moves) == n
+        # cooldown: catching again right away does nothing
+        catch()
+        assert not c.pranking
+        # emergency stop in the middle of a prank lets go at once
+        ov._last_prank = -1e9
+        c.anim.set(State.IDLE, force=True)
+        catch()
+        assert c.pranking
+        ov._apply_estop(True)
+        assert not c.pranking and c.prank_result == "interrupted"
+    finally:
+        ov.pet.close()
+        ov.chat.close()
+        ov.tray.hide()

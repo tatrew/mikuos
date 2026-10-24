@@ -518,6 +518,12 @@ class WindowsBridge:
             raise WindowsBridgeError("SetCursorPos failed")
         return {"x": x, "y": y}
 
+    @staticmethod
+    def mouse_button_down() -> bool:
+        """Any mouse button held right now (the user may be dragging something).
+        Reads button state only; keyboard keys are never queried."""
+        return any(user32.GetAsyncKeyState(vk) & 0x8000 for vk in (0x01, 0x02, 0x04))  # L, R, M buttons
+
     # ------------------------------------------------------------ content
     def capture_window(self, window_id: int, out_path: Path | None = None) -> dict:
         """Screenshot of one window via PrintWindow (works for occluded windows)."""

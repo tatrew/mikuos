@@ -115,7 +115,12 @@ DEFAULTS: dict[str, Any] = {
         "allowed_origins": [],
     },
     "ui": {
-        "avatar": "auto",  # auto | 3d | placeholder
+        "avatar": "auto",  # auto (sprite -> 3d -> placeholder) | sprite | 3d | placeholder
+        "sprite_scale": 2,  # integer pixel-art zoom of the 2D sprites (x pet_scale)
+        # prank: grab the real cursor and run with it; only if permissions.cursor_control == "allow"
+        "cursor_prank": True,
+        "cursor_prank_cooldown_s": 120,
+        "cursor_prank_chance": 0.5,  # per catch
         "model_px": 220,  # height of the 3D Miku on screen, px
         "pet_scale": 1.0,
         "walk_speed": 90,

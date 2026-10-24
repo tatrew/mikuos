@@ -27,6 +27,8 @@ class Settings:
     walk_probability: float = 0.45
     jump_probability: float = 0.15
     sit_probability: float = 0.20
+    prank_duration_s: float = 2.5  # how long she runs away with a grabbed cursor
+    prank_escape_px: float = 30.0  # the user pulls the mouse this far from her hand -> released
 
 
 class AvatarController:
@@ -49,6 +51,55 @@ class AvatarController:
         self.paused = False  # emergency stop: freeze in place, no interaction
         self.pending_action: dict | None = None
         self.pending_age = 0.0
+        # cursor prank: she holds the cursor and runs; the app moves the real cursor to `hand`
+        self.prank_left = 0.0
+        self.prank_result: str | None = None  # "done" | "escaped" | "interrupted" after a prank ends
+
+    # --------------------------------------------------------- cursor prank
+    @property
+    def pranking(self) -> bool:
+        return self.prank_left > 0
+
+    @property
+    def hand(self) -> tuple[float, float]:
+        """Where the grabbed cursor is held: in front of her, at chest height."""
+        return self.x + self.facing * self.w * 0.22, self.foot - self.h * 0.35
+
+    def start_prank(self) -> bool:
+        """Grab the cursor and run along the current surface, away from where it was."""
+        s = self.support
+        if self.paused or s is None or self.pranking or s.width < self.w * 2.5:
+            return False
+        room_left, room_right = self.x - (s.x1 + self.w / 2), (s.x2 - self.w / 2) - self.x
+        direction = -1 if room_left > room_right else 1
+        dist = min(max(room_left, room_right), self.cfg.walk_speed * 1.9 * self.cfg.prank_duration_s)
+        if dist < self.w:
+            return False
+        self.target_x = self.x + direction * dist
+        self.facing = direction
+        self.prank_left = self.cfg.prank_duration_s
+        self.prank_result = None
+        self.look_at = None
+        self.anim.set(State.RUN, force=True)
+        return True
+
+    def end_prank(self, result: str) -> None:
+        if self.pranking:
+            self._finish_prank(result)
+
+    def _finish_prank(self, result: str) -> None:
+        self.prank_left = 0.0
+        self.prank_result = result
+        self.target_x = None
+        if self.support is not None and not self.paused:
+            # laughs when she got away with it, sulks when the user pulled free
+            self.anim.set(State.HAPPY if result == "done" else State.SAD, force=True)
+
+    def _prank_tick(self, dt: float) -> None:
+        self.prank_left -= dt
+        reached = self.target_x is None or self._walk_toward(self.target_x, dt, speed_mult=1.9)
+        if self.prank_left <= 0 or reached:
+            self._finish_prank("done")
 
     # -------------------------------------------------------------- inputs
     def set_surfaces(self, surfaces: list[Surface], window_moves: dict[int, tuple[int, int]] | None = None) -> None:
@@ -73,6 +124,7 @@ class AvatarController:
         self._start_fall()
 
     def start_drag(self) -> None:
+        self.end_prank("interrupted")
         self.anim.set(State.DRAG, force=True)
         self.support = None
         self.vx = self.vy = 0
@@ -108,6 +160,7 @@ class AvatarController:
         return True
 
     def _start_fall(self) -> None:
+        self.end_prank("interrupted")
         self.support = None
         self.vy = 0.0
         self.anim.set(State.FALL, force=True)
@@ -127,6 +180,9 @@ class AvatarController:
             self._physics(dt)
             return
         if st in (State.SIT, State.STAND_UP, State.LAND):
+            return
+        if self.pranking:
+            self._prank_tick(dt)
             return
         if self.pending_action:
             if st in (State.SITTING_IDLE, State.SLEEP):

@@ -99,8 +99,11 @@ class PetWindow(QWidget):
         self._update_mask()
 
     def _update_mask(self) -> None:
-        key = (self.state, self.frame, self.facing, int(self.t * 4) if self.state in (State.WALK, State.CHASE,
-                                                                                         State.HAPPY) else 0)
+        if hasattr(self.renderer, "mask_key"):  # frame-based renderers know when the silhouette changes
+            key = (self.renderer.mask_key(self.state, self.facing, self.t), self.estop, self.observing)
+        else:
+            key = (self.state, self.frame, self.facing, int(self.t * 4) if self.state in (State.WALK, State.CHASE,
+                                                                                             State.HAPPY) else 0)
         if key == self._mask_key:
             return
         self._mask_key = key
