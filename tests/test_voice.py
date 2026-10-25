@@ -131,3 +131,102 @@ def test_real_silero_to_whisper_round_trip(tmp_settings):
     audio16 = audio[: len(audio) // 3 * 3].reshape(-1, 3).mean(axis=1)
     text = SpeechRecognizer("small", models / "whisper").transcribe(audio16).lower()
     assert "следующ" in text and "трек" in text
+
+
+# ------------------------------------------------------------ Applio (RVC)
+from mikuos.voice.rvc import ApplioConverter, default_applio_dir  # noqa: E402
+
+
+def fake_applio(root, python=None):
+    rt = root / "data" / "runtime"
+    (root / "app" / "backend" / "applio").mkdir(parents=True)
+    (rt / "logs" / "MikuAI_e210_s6300").mkdir(parents=True)
+    (rt / "logs" / "IVF1811_Flat_MikuAI").mkdir()
+    (rt / "logs" / "Other_e10_s100").mkdir()
+    (rt / "logs" / "MikuAI_e210_s6300" / "MikuAI_e210_s6300.pth").write_bytes(b"x")
+    (rt / "logs" / "Other_e10_s100" / "Other_e10_s100.pth").write_bytes(b"x")
+    (rt / "logs" / "IVF1811_Flat_MikuAI" / "added_IVF1811_Flat_nprobe_1_MikuAI_v2.index").write_bytes(b"x")
+    (rt / ".venv" / "Scripts").mkdir(parents=True)
+    if python is None:
+        (rt / ".venv" / "Scripts" / "python.exe").write_bytes(b"")
+    import json
+    (root / "data" / "model-presets.json").write_text(json.dumps({"presets": {
+        "realtime:logs/MikuAI_e210_s6300/MikuAI_e210_s6300.pth": {"f0_method": "fcpe", "index_rate": 0, "pitch": 2}}}))
+    return rt
+
+
+def test_applio_model_discovery_and_presets(tmp_path):
+    rt = fake_applio(tmp_path)
+    c = ApplioConverter({"applio_dir": str(tmp_path), "protect": 0.4}, tmp_path / "tmp")
+    assert c.available and c.model.name == "MikuAI_e210_s6300.pth"
+    assert c.index.name == "added_IVF1811_Flat_nprobe_1_MikuAI_v2.index"
+    # the user's Applio preset wins over defaults, MikuOS settings win over the preset
+    assert c.params() == {"pitch": 2, "f0_method": "fcpe", "index_rate": 0, "protect": 0.4,
+                          "volume_envelope": 1.0, "embedder_model": "contentvec"}
+    explicit = ApplioConverter({"applio_dir": str(tmp_path), "model": "logs/Other_e10_s100/Other_e10_s100.pth"},
+                               tmp_path / "tmp")
+    assert explicit.model == rt / "logs" / "Other_e10_s100" / "Other_e10_s100.pth" and explicit.index is None
+    assert not ApplioConverter({"applio_dir": str(tmp_path), "enabled": False}, tmp_path).available
+    assert not ApplioConverter({"applio_dir": str(tmp_path / "nope")}, tmp_path).available
+    assert default_applio_dir().name == "Applio"
+
+
+@pytest.mark.skipif(not voice_dependencies()["numpy"], reason="numpy missing")
+async def test_speech_goes_through_rvc_and_falls_back_to_silero(tmp_settings):
+    class FakeRVC:
+        available, calls, result = True, [], None
+
+        def convert(self, audio, sr):
+            self.calls.append((len(audio), sr))
+            return self.result
+
+        def status(self):
+            return {}
+
+    v, bus, events, chats, played = make_voice(tmp_settings)
+    bus.bind_loop(asyncio.get_running_loop())
+    v.rvc = FakeRVC()
+    FakeRVC.result = (np.full(1000, 0.2, dtype="float32"), 40000)
+    assert await v.speak("привет")
+    FakeRVC.result = None  # Applio failed: the Silero voice is played instead of silence
+    assert await v.speak("привет")
+    assert v.rvc.calls == [(2400, 48000), (2400, 48000)] and played == [1000, 2400]
+
+
+def test_broken_applio_worker_is_reported_not_fatal(tmp_path):
+    """Real worker process and protocol, but no Applio engine behind it: convert() returns None."""
+    import shutil
+    import sys
+    fake_applio(tmp_path, python=False)
+    shutil.copy(sys.executable, tmp_path / "data" / "runtime" / ".venv" / "Scripts" / "python.exe")
+    c = ApplioConverter({"applio_dir": str(tmp_path), "start_timeout_s": 60}, tmp_path / "tmp")
+    assert c.available
+    assert c.convert(np.zeros(4800, dtype="float32"), 48000) is None
+    assert c.last_error and c.status()["running"] is False
+    assert not list((tmp_path / "tmp").glob("*.wav"))  # temp audio is cleaned up
+    c.close()
+
+
+@pytest.mark.skipif(not all(voice_dependencies().values()), reason="voice dependencies not installed")
+def test_real_silero_through_applio_is_still_understandable(tmp_settings):
+    """Real Applio install + Miku RVC model (skipped if absent): the converted voice keeps its length
+    and Whisper still recognizes the words."""
+    from mikuos.config import PROJECT_ROOT
+    from mikuos.voice.stt import SpeechRecognizer
+    from mikuos.voice.tts import SpeechSynthesizer
+    c = ApplioConverter({}, tmp_settings.resolve_path("models").parent / "tmp" / "rvc")
+    models = PROJECT_ROOT / "data" / "models"
+    if not c.available or not (models / "silero").exists() or not (models / "whisper").exists():
+        pytest.skip("Applio with a Miku model, or speech models, not installed")
+    try:
+        audio, sr = SpeechSynthesizer(models / "silero").synthesize("Мику, включи следующий трек.")
+        out = c.convert(audio, sr, timeout=240)
+        assert out is not None, c.last_error
+        conv, csr = out
+        assert abs(len(conv) / csr - len(audio) / sr) < 0.3 and float(np.abs(conv).max()) > 0.05
+        idx = (np.arange(int(len(conv) * 16000 / csr)) * csr / 16000).astype(int)
+        text = SpeechRecognizer("small", models / "whisper").transcribe(conv[idx]).lower()
+        # observed: "мику, включи следующий тик." - RVC slightly blurs some words, the phrase stays clear
+        assert "мику" in text and "включи" in text and "следующ" in text, text
+    finally:
+        c.close()

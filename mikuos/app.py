@@ -121,7 +121,7 @@ class MikuOS:
             self.hotkey.stop()
         if self.voice_hotkey:
             self.voice_hotkey.stop()
-        self.voice.cancel()
+        self.voice.close()
         self.store.add_event("app_stopped", {})
         await self.llm.aclose()
         self.db.close()
@@ -153,6 +153,9 @@ class MikuOS:
             await asyncio.to_thread(self.voice.stt.load)
             await asyncio.to_thread(self.voice.tts.load)
             log.info("voice models loaded")
+            if self.voice.rvc.available:
+                ok = await asyncio.to_thread(self.voice.warm_up_rvc)
+                log.info("Applio RVC voice %s", "ready" if ok else f"unavailable: {self.voice.rvc.last_error}")
             await self.bus.publish("voice_state", {"state": self.voice.state, "ready": True})
         except Exception as e:  # noqa: BLE001 - voice is optional, the rest keeps working
             self.voice.last_error = str(e)

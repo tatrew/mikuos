@@ -105,6 +105,17 @@ DEFAULTS: dict[str, Any] = {
         "silence_s": 1.2,
         "max_record_s": 15,
         "preload": True,  # load the models at start so the first press answers quickly
+        # optional: pass the Silero voice through an RVC model in a local Applio install
+        "rvc": {
+            "enabled": True,  # used only if Applio and a model are found; otherwise plain Silero
+            "applio_dir": "",  # "" = %LOCALAPPDATA%\\Applio
+            "model": "",  # .pth path (absolute or relative to Applio's data/runtime); "" = auto
+            "model_match": "miku",  # auto: first logs/*/*.pth whose name contains this
+            "index": "",  # .index path; "" = auto (an index named after the model)
+            # None = the value saved for this model in Applio (model-presets.json), else a default
+            "pitch": None, "f0_method": None, "index_rate": None, "protect": None,
+            "timeout_s": 30, "start_timeout_s": 120, "warmup_timeout_s": 180,
+        },
     },
     "web": {
         # {q} is replaced with the URL-encoded query

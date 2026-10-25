@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from .rvc import ApplioConverter
 from .stt import SpeechRecognizer
 from .tts import SpeechSynthesizer
 
@@ -43,6 +44,7 @@ class VoiceService:
         cfg = self.cfg
         self.stt = SpeechRecognizer(cfg.get("stt_model", "small"), models_dir / "whisper", cfg.get("language", "ru"))
         self.tts = SpeechSynthesizer(models_dir / "silero", cfg.get("tts_speaker", "xenia"))
+        self.rvc = ApplioConverter(cfg.get("rvc") or {}, models_dir.parent / "tmp" / "rvc")
         self.state = "idle"
         self.last_error: str | None = None
         self._stop_recording = threading.Event()
@@ -60,7 +62,8 @@ class VoiceService:
     def status(self) -> dict:
         return {"available": self.available, "state": self.state, "dependencies": voice_dependencies(),
                 "stt_loaded": self.stt.loaded, "tts_loaded": self.tts.loaded, "error": self.last_error,
-                "hotkey": self.cfg.get("hotkey"), "speak_replies": self.cfg.get("speak_replies", "all")}
+                "hotkey": self.cfg.get("hotkey"), "speak_replies": self.cfg.get("speak_replies", "all"),
+                "rvc": self.rvc.status()}
 
     async def _set_state(self, state: str, **extra) -> None:
         self.state = state
@@ -155,6 +158,12 @@ class VoiceService:
         audio, sr = await asyncio.to_thread(self.tts.synthesize, text)
         if not len(audio):
             return False
+        if self.rvc.available:  # Silero -> Applio (RVC) voice; on any failure the Silero voice is kept
+            converted = await asyncio.to_thread(self.rvc.convert, audio, sr)
+            if converted is not None:
+                audio, sr = converted
+            if self.blocked():
+                return False
         await self._set_state("speaking")
         sid = uuid.uuid4().hex[:12]
         self._stop_playback.clear()
@@ -203,3 +212,15 @@ class VoiceService:
         """Emergency stop: close the microphone and stop talking right away."""
         self._stop_recording.set()
         self._stop_playback.set()
+
+    def warm_up_rvc(self) -> bool:
+        """Start the Applio worker and run one short phrase: the first conversion compiles GPU
+        kernels and can take ~30 s, so it happens at startup instead of on the first reply."""
+        if not self.rvc.available:
+            return False
+        audio, sr = self.tts.synthesize("Привет.")
+        return self.rvc.convert(audio, sr, timeout=float(self.cfg.get("rvc", {}).get("warmup_timeout_s", 180))) is not None
+
+    def close(self) -> None:
+        self.cancel()
+        self.rvc.close()
